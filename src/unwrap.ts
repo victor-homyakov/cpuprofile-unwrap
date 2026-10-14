@@ -36,7 +36,7 @@ export function unwrapProfile(profile: CpuProfile): UnwrapResult {
   const samplesWithTicksBefore = samples.filter((s) => s.ticks).length;
 
   const nodesById = new Map(profile.nodes.map((n) => [n.id, n]));
-  const childrenByKey = new Map<number, Map<string, number>>();
+  const childrenByKey = new Map<number, Map<number, number>>();
   let maxId = 0;
   for (const node of profile.nodes) {
     if (node.id > maxId) maxId = node.id;
@@ -67,9 +67,15 @@ export function unwrapProfile(profile: CpuProfile): UnwrapResult {
       }
 
       cutNames[sample.nearRoot] = (cutNames[sample.nearRoot] ?? 0) + 1;
-      const inner = nodes.slice(0, -1);
-      const full = [...inner, ...alignment.missing, nodes[nodes.length - 1]!];
-      const leafId = ensurePath(profile, nodesById, childrenByKey, nextId, full);
+      const leafId = ensurePath(
+        profile,
+        nodesById,
+        childrenByKey,
+        nextId,
+        index.frameIdByNode,
+        nodes,
+        alignment.missing,
+      );
       profile.samples[i] = leafId;
       repaired[i] = 1;
       repairedCount++;

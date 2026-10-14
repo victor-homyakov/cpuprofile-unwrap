@@ -184,6 +184,26 @@ describe("unwrapProfile", () => {
     assert.deepEqual(names(profile, 1), ["leafB", ...shared, "(root)"]);
   });
 
+  it("reuses one restored path for samples that need the same outer frames", () => {
+    const complete = ["leafA", ...shared, "C", "processTicksAndRejections", "(root)"];
+    const truncated = ["leafB", ...shared, "(root)"];
+    const profile = profileFromStacks([complete, truncated, truncated]);
+
+    const { profile: out, stats } = unwrapProfile(profile);
+    assert.equal(stats.repairedCount, 2);
+    const index = buildIndex(out);
+    const first = stackNodes(index, out.samples[1]!);
+    const second = stackNodes(index, out.samples[2]!);
+    const idOf = (stack: ProfileNode[], name: string) =>
+      stack.find((n) => functionName(n) === name)!.id;
+    assert.equal(idOf(first, "C"), idOf(second, "C"));
+    assert.equal(
+      idOf(first, "processTicksAndRejections"),
+      idOf(second, "processTicksAndRejections"),
+    );
+    assert.equal(out.samples[1], out.samples[2]);
+  });
+
   it("does not attach shallow real callbacks to ticks", () => {
     const complete = ["leafA", ...shared, "C", "processTicksAndRejections", "(root)"];
     const short = ["onStreamRead", "(root)"];

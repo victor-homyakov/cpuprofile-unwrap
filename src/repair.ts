@@ -1,34 +1,41 @@
-import { cloneCallFrame, nodeKey } from "./profile.ts";
+import { cloneCallFrame } from "./profile.ts";
 import type { CpuProfile, ProfileNode } from "./types.ts";
 
 /**
- * Insert a leaf→root path (including existing root as last frame) into the tree.
- * Reuses children with the same callFrame key. Returns the leaf node id.
+ * Insert head (leaf→root, including root) with `middle` spliced in before root.
+ * Reuses children with the same interned call-frame id. Returns the leaf node id.
  */
 export function ensurePath(
   profile: CpuProfile,
   nodesById: Map<number, ProfileNode>,
-  childrenByKey: Map<number, Map<string, number>>,
+  childrenByKey: Map<number, Map<number, number>>,
   nextId: { value: number },
-  leafToRoot: ProfileNode[],
+  frameIdByNode: Map<number, number>,
+  head: readonly ProfileNode[],
+  middle: readonly ProfileNode[],
 ): number {
-  if (leafToRoot.length === 0) {
+  if (head.length === 0) {
     throw new Error("empty stack");
   }
-  const root = leafToRoot[leafToRoot.length - 1]!;
+  const root = head[head.length - 1]!;
+  const headFrames = head.length - 1;
   let currentId = root.id;
 
-  // Walk root → leaf (skip the root frame itself).
-  for (let i = leafToRoot.length - 2; i >= 0; i--) {
-    const frameNode = leafToRoot[i]!;
-    const key = nodeKey(frameNode);
+  // Walk root → leaf. Virtual sequence is head without root, then middle, then root.
+  for (let i = headFrames + middle.length - 1; i >= 0; i--) {
+    const frameNode = i < headFrames ? head[i]! : middle[i - headFrames]!;
+    const key = frameIdByNode.get(frameNode.id);
+    if (key === undefined) {
+      throw new Error(`no frame id for node ${frameNode.id}`);
+    }
     let byKey = childrenByKey.get(currentId);
     if (!byKey) {
       byKey = new Map();
       const parent = nodesById.get(currentId)!;
       for (const cid of parent.children ?? []) {
         const child = nodesById.get(cid);
-        if (child) byKey.set(nodeKey(child), cid);
+        const childKey = child && frameIdByNode.get(child.id);
+        if (childKey !== undefined) byKey.set(childKey, cid);
       }
       childrenByKey.set(currentId, byKey);
     }
@@ -46,6 +53,7 @@ export function ensurePath(
     };
     profile.nodes.push(created);
     nodesById.set(id, created);
+    frameIdByNode.set(id, key);
     const parent = nodesById.get(currentId)!;
     if (!parent.children) parent.children = [];
     parent.children.push(id);

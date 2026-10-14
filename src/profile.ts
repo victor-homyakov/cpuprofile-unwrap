@@ -34,10 +34,6 @@ export function callFrameKey(frame: CallFrame): string {
   ].join("\0");
 }
 
-export function nodeKey(node: ProfileNode): string {
-  return callFrameKey(node.callFrame);
-}
-
 export type ProfileIndex = {
   profile: CpuProfile;
   nodesById: Map<number, ProfileNode>;
