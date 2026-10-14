@@ -1,0 +1,22 @@
+{
+  "name": "cpuprofile-unwrap",
+  "version": "1.0.0",
+  "description": "Detect and restore V8/Node CPU profile stacks truncated at the root",
+  "type": "module",
+  "bin": {
+    "cpuprofile-unwrap": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "tsx --test test/*.test.ts",
+    "unwrap": "tsx src/cli.ts"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}
