@@ -1,4 +1,4 @@
-import { pickAlignment } from "./align.ts";
+import { pickAlignment, prepareDonor } from "./align.ts";
 import {
   analyzeSamples,
   candidateRuns,
@@ -12,7 +12,7 @@ import {
   stackNodes,
 } from "./profile.ts";
 import { ensurePath, pruneUnreachable, recomputeHitCounts } from "./repair.ts";
-import type { CpuProfile, ProfileNode, UnwrapStats } from "./types.ts";
+import type { CpuProfile, UnwrapStats } from "./types.ts";
 
 export type UnwrapResult = {
   profile: CpuProfile;
@@ -59,16 +59,20 @@ export function unwrapProfile(profile: CpuProfile): UnwrapResult {
   const runs = candidateRuns(samples);
   for (const [runStart, runEnd] of runs) {
     const { prev, next } = nearestTicksNeighbors(samples, runStart, runEnd);
-    const donors: Array<{ nodes: ProfileNode[]; sampleIndex: number }> = [
-      ...prev,
-      ...next,
-    ].map((s) => ({ nodes: s.nodes, sampleIndex: s.index }));
+    const donors = [...prev, ...next].map((s) =>
+      prepareDonor(s.nodes, s.index, index.frameKeyByNode),
+    );
 
     for (let i = runStart; i <= runEnd; i++) {
       const sample = samples[i]!;
       if (!sample.structuralCandidate) continue;
 
-      const alignment = pickAlignment(sample.nodes, sample.index, donors);
+      const alignment = pickAlignment(
+        sample.nodes,
+        sample.index,
+        donors,
+        index.frameKeyByNode,
+      );
       if (!alignment) {
         skippedCount++;
         continue;

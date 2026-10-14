@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { buildIndex, functionName, stackNodes } from "../src/profile.ts";
+import { buildIndex, callFrameKey, functionName, stackNodes } from "../src/profile.ts";
 import type { CallFrame, CpuProfile, ProfileNode } from "../src/types.ts";
 import { unwrapProfile } from "../src/unwrap.ts";
 
@@ -65,6 +65,57 @@ function profileFromStacks(stacks: string[][]): CpuProfile {
   };
 }
 
+/** Same as profileFromStacks, but frames are supplied explicitly. */
+function profileFromFrameStacks(stacks: CallFrame[][]): CpuProfile {
+  const root: ProfileNode = {
+    id: 1,
+    callFrame: frame("(root)"),
+    hitCount: 0,
+    children: [],
+  };
+  const nodes: ProfileNode[] = [root];
+  let nextId = 2;
+  const childByKey = new Map<string, ProfileNode>();
+  const samples: number[] = [];
+
+  for (const stack of stacks) {
+    assert.equal(stack[stack.length - 1]!.functionName, "(root)");
+    let parent = root;
+    for (let i = stack.length - 2; i >= 0; i--) {
+      const callFrame = stack[i]!;
+      const k = `${parent.id}\0${callFrameKey(callFrame)}`;
+      let child = childByKey.get(k);
+      if (!child) {
+        child = {
+          id: nextId++,
+          callFrame,
+          hitCount: 0,
+          children: [],
+        };
+        nodes.push(child);
+        parent.children = parent.children ?? [];
+        parent.children.push(child.id);
+        childByKey.set(k, child);
+      }
+      parent = child;
+    }
+    parent.hitCount++;
+    samples.push(parent.id);
+  }
+
+  return {
+    nodes,
+    startTime: 0,
+    endTime: stacks.length,
+    samples,
+    timeDeltas: samples.map(() => 1),
+  };
+}
+
+function at(functionName: string, url: string, lineNumber: number): CallFrame {
+  return { functionName, scriptId: url, url, lineNumber, columnNumber: 0 };
+}
+
 function names(profile: CpuProfile, sampleIndex: number): string[] {
   const index = buildIndex(profile);
   return stackNodes(index, profile.samples[sampleIndex]!).map(functionName);
@@ -116,6 +167,21 @@ describe("unwrapProfile", () => {
       "processTicksAndRejections",
       "(root)",
     ]);
+  });
+
+  it("does not treat same function names at different locations as one frame", () => {
+    const sharedA = shared.map((name, i) => at(name, "a.js", i));
+    const sharedB = shared.map((name, i) => at(name, "b.js", i));
+    const root = at("(root)", "", 0);
+    const profile = profileFromFrameStacks([
+      [at("leafA", "a.js", 1), ...sharedA, at("C", "a.js", 20), at("processTicksAndRejections", "node:internal", 1), root],
+      [at("leafB", "b.js", 1), ...sharedB, root],
+      [at("leafA", "a.js", 1), ...sharedA, at("C", "a.js", 20), at("processTicksAndRejections", "node:internal", 1), root],
+    ]);
+
+    const { stats } = unwrapProfile(profile);
+    assert.equal(stats.repairedCount, 0);
+    assert.deepEqual(names(profile, 1), ["leafB", ...shared, "(root)"]);
   });
 
   it("does not attach shallow real callbacks to ticks", () => {

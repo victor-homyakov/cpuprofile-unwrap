@@ -43,13 +43,24 @@ export type ProfileIndex = {
   nodesById: Map<number, ProfileNode>;
   parent: Map<number, number>;
   rootId: number;
+  /** Interned call-frame key for each node id. Equal frames share one string. */
+  frameKeyByNode: Map<number, string>;
 };
 
 export function buildIndex(profile: CpuProfile): ProfileIndex {
   const nodesById = new Map<number, ProfileNode>();
   const parent = new Map<number, number>();
+  const canonicalKey = new Map<string, string>();
+  const frameKeyByNode = new Map<number, string>();
   for (const node of profile.nodes) {
     nodesById.set(node.id, node);
+    const raw = callFrameKey(node.callFrame);
+    let key = canonicalKey.get(raw);
+    if (key === undefined) {
+      key = raw;
+      canonicalKey.set(raw, key);
+    }
+    frameKeyByNode.set(node.id, key);
     for (const child of node.children ?? []) {
       parent.set(child, node.id);
     }
@@ -59,7 +70,7 @@ export function buildIndex(profile: CpuProfile): ProfileIndex {
   if (!root) {
     throw new Error("CPU profile has no nodes");
   }
-  return { profile, nodesById, parent, rootId: root.id };
+  return { profile, nodesById, parent, rootId: root.id, frameKeyByNode };
 }
 
 /** Stack of node ids from leaf to root. */
