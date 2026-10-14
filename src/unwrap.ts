@@ -1,6 +1,7 @@
 import { pickAlignment, prepareDonor } from "./align.ts";
 import {
   analyzeSamples,
+  bindSampleNodes,
   candidateRuns,
   nearestTicksNeighbors,
 } from "./detect.ts";
@@ -8,8 +9,6 @@ import {
   RUNTIME_ENTRIES,
   buildIndex,
   functionName,
-  hasTicks,
-  stackNodes,
 } from "./profile.ts";
 import { ensurePath, pruneUnreachable, recomputeHitCounts } from "./repair.ts";
 import type { CpuProfile, UnwrapStats } from "./types.ts";
@@ -29,18 +28,10 @@ function rootChildNames(profile: CpuProfile): string[] {
   });
 }
 
-function countTicksSamples(profile: CpuProfile): number {
-  const index = buildIndex(profile);
-  let n = 0;
-  for (const leaf of profile.samples) {
-    if (hasTicks(stackNodes(index, leaf))) n++;
-  }
-  return n;
-}
-
 export function unwrapProfile(profile: CpuProfile): UnwrapResult {
   const index = buildIndex(profile);
   const { samples, maxDepth, depthThreshold } = analyzeSamples(index);
+  const loadNodes = bindSampleNodes(index);
   const rootChildrenBefore = rootChildNames(profile);
   const samplesWithTicksBefore = samples.filter((s) => s.ticks).length;
 
@@ -55,34 +46,32 @@ export function unwrapProfile(profile: CpuProfile): UnwrapResult {
   const cutNames: Record<string, number> = {};
   let repairedCount = 0;
   let skippedCount = 0;
+  const repaired = new Uint8Array(samples.length);
 
   const runs = candidateRuns(samples);
   for (const [runStart, runEnd] of runs) {
     const { prev, next } = nearestTicksNeighbors(samples, runStart, runEnd);
     const donors = [...prev, ...next].map((s) =>
-      prepareDonor(s.nodes, s.index, index.frameIdByNode),
+      prepareDonor(loadNodes(s), s.index, index.frameIdByNode),
     );
 
     for (let i = runStart; i <= runEnd; i++) {
       const sample = samples[i]!;
       if (!sample.structuralCandidate) continue;
 
-      const alignment = pickAlignment(
-        sample.nodes,
-        sample.index,
-        donors,
-        index.frameIdByNode,
-      );
+      const nodes = loadNodes(sample);
+      const alignment = pickAlignment(nodes, sample.index, donors, index.frameIdByNode);
       if (!alignment) {
         skippedCount++;
         continue;
       }
 
       cutNames[sample.nearRoot] = (cutNames[sample.nearRoot] ?? 0) + 1;
-      const inner = sample.nodes.slice(0, -1);
-      const full = [...inner, ...alignment.missing, sample.nodes[sample.nodes.length - 1]!];
+      const inner = nodes.slice(0, -1);
+      const full = [...inner, ...alignment.missing, nodes[nodes.length - 1]!];
       const leafId = ensurePath(profile, nodesById, childrenByKey, nextId, full);
       profile.samples[i] = leafId;
+      repaired[i] = 1;
       repairedCount++;
     }
   }
@@ -90,7 +79,10 @@ export function unwrapProfile(profile: CpuProfile): UnwrapResult {
   recomputeHitCounts(profile);
   pruneUnreachable(profile, index.rootId);
 
-  const samplesWithTicksAfter = countTicksSamples(profile);
+  let samplesWithTicksAfter = 0;
+  for (let i = 0; i < samples.length; i++) {
+    if (samples[i]!.ticks || repaired[i]) samplesWithTicksAfter++;
+  }
 
   const stats: UnwrapStats = {
     sampleCount: samples.length,

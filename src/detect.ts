@@ -1,9 +1,9 @@
 import {
+  IDLE_OR_GC,
   RUNTIME_ENTRIES,
   SKIP_WHEN_SEEKING_DONOR,
-  hasTicks,
-  isIdleOrGcStack,
-  nearRootName,
+  TICKS_NAME,
+  functionName,
   stackNodes,
   type ProfileIndex,
 } from "./profile.ts";
@@ -12,7 +12,8 @@ import type { ProfileNode } from "./types.ts";
 export type SampleInfo = {
   index: number;
   leafId: number;
-  nodes: ProfileNode[];
+  /** Filled on demand for candidates and donors. */
+  nodes: ProfileNode[] | null;
   depth: number;
   nearRoot: string;
   ticks: boolean;
@@ -20,30 +21,85 @@ export type SampleInfo = {
   structuralCandidate: boolean;
 };
 
+type NodeFacts = {
+  depth: Map<number, number>;
+  nearRoot: Map<number, string>;
+  ticks: Map<number, boolean>;
+  idleOrGc: Map<number, boolean>;
+};
+
+/** Depth, near-root name, and ticks/idle flags via the parent chain. Each node is visited once. */
+function nodeFacts(index: ProfileIndex): NodeFacts {
+  const depth = new Map<number, number>();
+  const nearRoot = new Map<number, string>();
+  const ticks = new Map<number, boolean>();
+  const idleOrGc = new Map<number, boolean>();
+  const { parent, nodesById } = index;
+
+  const ensure = (start: number): void => {
+    const chain: number[] = [];
+    const seen = new Set<number>();
+    let cur: number | undefined = start;
+    while (cur !== undefined && !depth.has(cur) && !seen.has(cur)) {
+      seen.add(cur);
+      chain.push(cur);
+      cur = parent.get(cur);
+    }
+    for (let i = chain.length - 1; i >= 0; i--) {
+      const id = chain[i]!;
+      if (depth.has(id)) continue;
+      const node = nodesById.get(id);
+      if (!node) {
+        depth.set(id, 0);
+        nearRoot.set(id, "");
+        ticks.set(id, false);
+        idleOrGc.set(id, false);
+        continue;
+      }
+      const name = functionName(node);
+      const p = parent.get(id);
+      const pDepth = p === undefined ? undefined : depth.get(p);
+      if (pDepth === undefined) {
+        depth.set(id, 1);
+        nearRoot.set(id, name);
+        ticks.set(id, name === TICKS_NAME);
+        idleOrGc.set(id, IDLE_OR_GC.has(name));
+      } else {
+        depth.set(id, pDepth + 1);
+        nearRoot.set(id, pDepth === 1 ? name : nearRoot.get(p!)!);
+        ticks.set(id, ticks.get(p!)! || name === TICKS_NAME);
+        idleOrGc.set(id, idleOrGc.get(p!)! || IDLE_OR_GC.has(name));
+      }
+    }
+  };
+
+  for (const leafId of index.profile.samples) ensure(leafId);
+  return { depth, nearRoot, ticks, idleOrGc };
+}
+
 export function analyzeSamples(index: ProfileIndex): {
   samples: SampleInfo[];
   maxDepth: number;
   depthThreshold: number;
 } {
+  const facts = nodeFacts(index);
+  let maxDepth = 0;
   const samples: SampleInfo[] = index.profile.samples.map((leafId, i) => {
-    const nodes = stackNodes(index, leafId);
-    const nearRoot = nearRootName(nodes);
+    const depth = facts.depth.get(leafId) ?? 0;
+    if (depth > maxDepth) maxDepth = depth;
+    const near = facts.nearRoot.get(leafId) ?? "";
     return {
       index: i,
       leafId,
-      nodes,
-      depth: nodes.length,
-      nearRoot,
-      ticks: hasTicks(nodes),
-      idleOrGc: isIdleOrGcStack(nodes),
-      structuralCandidate: !RUNTIME_ENTRIES.has(nearRoot),
+      nodes: null,
+      depth,
+      nearRoot: near,
+      ticks: facts.ticks.get(leafId) ?? false,
+      idleOrGc: facts.idleOrGc.get(leafId) ?? false,
+      structuralCandidate: !RUNTIME_ENTRIES.has(near),
     };
   });
 
-  let maxDepth = 0;
-  for (const s of samples) {
-    if (s.depth > maxDepth) maxDepth = s.depth;
-  }
   const depthThreshold =
     maxDepth >= 80 ? Math.max(80, Math.floor(0.75 * maxDepth)) : 1;
 
@@ -53,6 +109,23 @@ export function analyzeSamples(index: ProfileIndex): {
   }
 
   return { samples, maxDepth, depthThreshold };
+}
+
+/** Materialize a sample stack, sharing the array across samples with the same leaf. */
+export function bindSampleNodes(
+  index: ProfileIndex,
+): (sample: SampleInfo) => ProfileNode[] {
+  const cache = new Map<number, ProfileNode[]>();
+  return (sample) => {
+    if (sample.nodes) return sample.nodes;
+    let nodes = cache.get(sample.leafId);
+    if (!nodes) {
+      nodes = stackNodes(index, sample.leafId);
+      cache.set(sample.leafId, nodes);
+    }
+    sample.nodes = nodes;
+    return nodes;
+  };
 }
 
 /** Consecutive structural candidates, ignoring idle/GC gaps in neighbor search only. */
