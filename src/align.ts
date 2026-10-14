@@ -1,4 +1,4 @@
-import { TICKS_NAME, callFrameKey, functionName } from "./profile.ts";
+import { TICKS_NAME, functionName } from "./profile.ts";
 import type { ProfileNode } from "./types.ts";
 
 export const MIN_WINDOW = 8;
@@ -14,56 +14,60 @@ export type Alignment = {
 export type Donor = {
   nodes: ProfileNode[];
   sampleIndex: number;
-  /** Leaf→root keys, excluding (root). Built once per donor. */
-  keys: string[];
+  /** Leaf→root frame ids, excluding (root). Built once per donor. */
+  frameIds: number[];
+  /** Highest index of processTicksAndRejections in frameIds, or -1. */
+  ticksIndex: number;
 };
 
-function frameKey(node: ProfileNode, frameKeyByNode: Map<number, string>): string {
-  return frameKeyByNode.get(node.id) ?? callFrameKey(node.callFrame);
+function frameId(node: ProfileNode, frameIdByNode: Map<number, number>): number {
+  return frameIdByNode.get(node.id) ?? 0;
 }
 
-/** Key array for a donor stack. Excludes the root frame. */
+/** Frame-id array for a donor stack. Excludes the root frame. */
 export function prepareDonor(
   nodes: ProfileNode[],
   sampleIndex: number,
-  frameKeyByNode: Map<number, string>,
+  frameIdByNode: Map<number, number>,
 ): Donor {
   const n = Math.max(0, nodes.length - 1);
-  const keys = new Array<string>(n);
-  for (let i = 0; i < n; i++) keys[i] = frameKey(nodes[i]!, frameKeyByNode);
-  return { nodes, sampleIndex, keys };
+  const frameIds = new Array<number>(n);
+  let ticksIndex = -1;
+  for (let i = 0; i < n; i++) {
+    const node = nodes[i]!;
+    frameIds[i] = frameId(node, frameIdByNode);
+    if (functionName(node) === TICKS_NAME) ticksIndex = i;
+  }
+  return { nodes, sampleIndex, frameIds, ticksIndex };
 }
 
 function rightmostWindowMatch(
-  donorKeys: string[],
-  donorNodes: ProfileNode[],
-  ngram: string[],
+  donorIds: number[],
+  ticksIndex: number,
+  truncIds: number[],
+  w: number,
 ): number {
-  const w = ngram.length;
-  if (w === 0 || w > donorKeys.length) return -1;
-  for (let i = donorKeys.length - w; i >= 0; i--) {
+  if (w === 0 || w > donorIds.length || w > truncIds.length || ticksIndex < 0) return -1;
+  const truncStart = truncIds.length - w;
+  for (let i = Math.min(donorIds.length - w, ticksIndex - w); i >= 0; i--) {
     let ok = true;
     for (let j = 0; j < w; j++) {
-      if (donorKeys[i + j] !== ngram[j]) {
+      if (donorIds[i + j] !== truncIds[truncStart + j]) {
         ok = false;
         break;
       }
     }
-    if (!ok) continue;
-    const hasTicksAfter = donorNodes
-      .slice(i + w)
-      .some((n) => functionName(n) === TICKS_NAME);
-    if (hasTicksAfter) return i;
+    if (ok) return i;
   }
   return -1;
 }
 
-export function alignWithDonor(truncKeys: string[], donor: Donor): Alignment | null {
-  // Keys are leaf→root and already exclude (root).
-  const donorKeys = donor.keys;
-  if (truncKeys.length === 0 || donorKeys.length === 0) return null;
+export function alignWithDonor(truncIds: number[], donor: Donor): Alignment | null {
+  // Ids are leaf→root and already exclude (root).
+  const donorIds = donor.frameIds;
+  if (truncIds.length === 0 || donorIds.length === 0) return null;
 
-  const hi = Math.min(MAX_WINDOW, truncKeys.length, donorKeys.length);
+  const hi = Math.min(MAX_WINDOW, truncIds.length, donorIds.length);
   let bestW = 0;
   let bestStart = -1;
 
@@ -71,8 +75,7 @@ export function alignWithDonor(truncKeys: string[], donor: Donor): Alignment | n
   let high = hi;
   while (lo <= high) {
     const mid = (lo + high) >> 1;
-    const ngram = truncKeys.slice(truncKeys.length - mid);
-    const idx = rightmostWindowMatch(donorKeys, donor.nodes, ngram);
+    const idx = rightmostWindowMatch(donorIds, donor.ticksIndex, truncIds, mid);
     if (idx >= 0) {
       bestW = mid;
       bestStart = idx;
@@ -83,8 +86,8 @@ export function alignWithDonor(truncKeys: string[], donor: Donor): Alignment | n
   }
 
   if (bestW < MIN_WINDOW || bestStart < 0) return null;
+  if (donor.ticksIndex < bestStart + bestW) return null;
   const missing = donor.nodes.slice(bestStart + bestW, donor.nodes.length - 1);
-  if (!missing.some((n) => functionName(n) === TICKS_NAME)) return null;
 
   return {
     donorIndex: donor.sampleIndex,
@@ -98,17 +101,17 @@ export function pickAlignment(
   truncated: ProfileNode[],
   sampleIndex: number,
   donors: Donor[],
-  frameKeyByNode: Map<number, string>,
+  frameIdByNode: Map<number, number>,
 ): Alignment | null {
   const truncLen = truncated.length - 1;
   if (truncLen <= 0) return null;
-  const truncKeys = new Array<string>(truncLen);
-  for (let i = 0; i < truncLen; i++) truncKeys[i] = frameKey(truncated[i]!, frameKeyByNode);
+  const truncIds = new Array<number>(truncLen);
+  for (let i = 0; i < truncLen; i++) truncIds[i] = frameId(truncated[i]!, frameIdByNode);
 
   let best: Alignment | null = null;
   let bestDist = Infinity;
   for (const donor of donors) {
-    const alignment = alignWithDonor(truncKeys, donor);
+    const alignment = alignWithDonor(truncIds, donor);
     if (!alignment) continue;
     const dist = Math.abs(donor.sampleIndex - sampleIndex);
     if (

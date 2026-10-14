@@ -60,7 +60,7 @@ export function unwrapProfile(profile: CpuProfile): UnwrapResult {
   for (const [runStart, runEnd] of runs) {
     const { prev, next } = nearestTicksNeighbors(samples, runStart, runEnd);
     const donors = [...prev, ...next].map((s) =>
-      prepareDonor(s.nodes, s.index, index.frameKeyByNode),
+      prepareDonor(s.nodes, s.index, index.frameIdByNode),
     );
 
     for (let i = runStart; i <= runEnd; i++) {
@@ -71,7 +71,7 @@ export function unwrapProfile(profile: CpuProfile): UnwrapResult {
         sample.nodes,
         sample.index,
         donors,
-        index.frameKeyByNode,
+        index.frameIdByNode,
       );
       if (!alignment) {
         skippedCount++;
