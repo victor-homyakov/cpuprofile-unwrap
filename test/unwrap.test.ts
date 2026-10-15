@@ -204,6 +204,52 @@ describe("unwrapProfile", () => {
     assert.equal(out.samples[1], out.samples[2]);
   });
 
+  it("shares the restored prefix when two leaves differ", () => {
+    const complete = ["leafA", ...shared, "C", "processTicksAndRejections", "(root)"];
+    const profile = profileFromStacks([
+      complete,
+      ["leafB", ...shared, "(root)"],
+      ["leafD", ...shared, "(root)"],
+    ]);
+
+    const { profile: out, stats } = unwrapProfile(profile);
+    assert.equal(stats.repairedCount, 2);
+    const index = buildIndex(out);
+    const parentId = (sampleIndex: number, name: string) => {
+      const stack = stackNodes(index, out.samples[sampleIndex]!);
+      const at = stack.findIndex((n) => functionName(n) === name);
+      return stack[at + 1]!.id;
+    };
+    assert.equal(parentId(1, "leafB"), parentId(2, "leafD"));
+    assert.notEqual(out.samples[1], out.samples[2]);
+  });
+
+  it("restores different outer frames from the nearer donor", () => {
+    const profile = profileFromStacks([
+      ["leafA", ...shared, "C", "processTicksAndRejections", "(root)"],
+      ["leafB", ...shared, "(root)"],
+      ["leafD", ...shared, "(root)"],
+      ["leafE", ...shared, "D", "processTicksAndRejections", "(root)"],
+    ]);
+
+    const { profile: out, stats } = unwrapProfile(profile);
+    assert.equal(stats.repairedCount, 2);
+    const index = buildIndex(out);
+    const namesOf = (sampleIndex: number) =>
+      stackNodes(index, out.samples[sampleIndex]!).map(functionName);
+    const left = namesOf(1);
+    const right = namesOf(2);
+    assert.equal(left.includes("C"), true);
+    assert.equal(left.includes("D"), false);
+    assert.equal(right.includes("D"), true);
+    assert.equal(right.includes("C"), false);
+    const ticksId = (sampleIndex: number) =>
+      stackNodes(index, out.samples[sampleIndex]!).find(
+        (n) => functionName(n) === "processTicksAndRejections",
+      )!.id;
+    assert.equal(ticksId(1), ticksId(2));
+  });
+
   it("does not attach shallow real callbacks to ticks", () => {
     const complete = ["leafA", ...shared, "C", "processTicksAndRejections", "(root)"];
     const short = ["onStreamRead", "(root)"];

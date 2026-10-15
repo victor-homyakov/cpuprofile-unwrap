@@ -1,9 +1,16 @@
 import { cloneCallFrame } from "./profile.ts";
 import type { CpuProfile, ProfileNode } from "./types.ts";
 
+/** Frame ids and tree node ids of the previous root→leaf insertion, excluding root. */
+export type PathCursor = {
+  frames: number[];
+  nodes: number[];
+};
+
 /**
  * Insert head (leaf→root, including root) with `middle` spliced in before root.
  * Reuses children with the same interned call-frame id. Returns the leaf node id.
+ * `cursor` skips the prefix already inserted by the previous call.
  */
 export function ensurePath(
   profile: CpuProfile,
@@ -13,21 +20,40 @@ export function ensurePath(
   frameIdByNode: Map<number, number>,
   head: readonly ProfileNode[],
   middle: readonly ProfileNode[],
+  cursor: PathCursor,
 ): number {
   if (head.length === 0) {
     throw new Error("empty stack");
   }
   const root = head[head.length - 1]!;
   const headFrames = head.length - 1;
-  let currentId = root.id;
+  const steps = headFrames + middle.length;
+  const frames = cursor.frames;
+  const nodeIds = cursor.nodes;
 
-  // Walk root → leaf. Virtual sequence is head without root, then middle, then root.
-  for (let i = headFrames + middle.length - 1; i >= 0; i--) {
-    const frameNode = i < headFrames ? head[i]! : middle[i - headFrames]!;
-    const key = frameIdByNode.get(frameNode.id);
-    if (key === undefined) {
-      throw new Error(`no frame id for node ${frameNode.id}`);
-    }
+  const frameAt = (k: number): ProfileNode => {
+    const i = steps - 1 - k;
+    return i < headFrames ? head[i]! : middle[i - headFrames]!;
+  };
+  const frameKey = (node: ProfileNode): number => {
+    const key = frameIdByNode.get(node.id);
+    if (key === undefined) throw new Error(`no frame id for node ${node.id}`);
+    return key;
+  };
+
+  let currentId = root.id;
+  let matched = 0;
+  const prevLen = Math.min(frames.length, nodeIds.length);
+  while (matched < steps && matched < prevLen) {
+    const key = frameKey(frameAt(matched));
+    if (key !== frames[matched]) break;
+    currentId = nodeIds[matched]!;
+    matched++;
+  }
+
+  for (let k = matched; k < steps; k++) {
+    const frameNode = frameAt(k);
+    const key = frameKey(frameNode);
     let byKey = childrenByKey.get(currentId);
     if (!byKey) {
       byKey = new Map();
@@ -42,25 +68,29 @@ export function ensurePath(
     const existing = byKey.get(key);
     if (existing !== undefined) {
       currentId = existing;
-      continue;
+    } else {
+      const id = nextId.value++;
+      const created: ProfileNode = {
+        id,
+        callFrame: cloneCallFrame(frameNode.callFrame),
+        hitCount: 0,
+        children: [],
+      };
+      profile.nodes.push(created);
+      nodesById.set(id, created);
+      frameIdByNode.set(id, key);
+      const parent = nodesById.get(currentId)!;
+      if (!parent.children) parent.children = [];
+      parent.children.push(id);
+      byKey.set(key, id);
+      childrenByKey.set(id, new Map());
+      currentId = id;
     }
-    const id = nextId.value++;
-    const created: ProfileNode = {
-      id,
-      callFrame: cloneCallFrame(frameNode.callFrame),
-      hitCount: 0,
-      children: [],
-    };
-    profile.nodes.push(created);
-    nodesById.set(id, created);
-    frameIdByNode.set(id, key);
-    const parent = nodesById.get(currentId)!;
-    if (!parent.children) parent.children = [];
-    parent.children.push(id);
-    byKey.set(key, id);
-    childrenByKey.set(id, new Map());
-    currentId = id;
+    frames[k] = key;
+    nodeIds[k] = currentId;
   }
+  frames.length = steps;
+  nodeIds.length = steps;
   return currentId;
 }
 

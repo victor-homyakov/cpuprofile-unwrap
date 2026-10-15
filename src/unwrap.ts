@@ -10,7 +10,7 @@ import {
   buildIndex,
   functionName,
 } from "./profile.ts";
-import { ensurePath, pruneUnreachable, recomputeHitCounts } from "./repair.ts";
+import { ensurePath, pruneUnreachable, recomputeHitCounts, type PathCursor } from "./repair.ts";
 import type { CpuProfile, UnwrapStats } from "./types.ts";
 
 export type UnwrapResult = {
@@ -43,6 +43,7 @@ export function unwrapProfile(profile: CpuProfile): UnwrapResult {
   }
   const nextId = { value: maxId + 1 };
 
+  const pathCursor: PathCursor = { frames: [], nodes: [] };
   const cutNames: Record<string, number> = {};
   let repairedCount = 0;
   let skippedCount = 0;
@@ -75,6 +76,7 @@ export function unwrapProfile(profile: CpuProfile): UnwrapResult {
         index.frameIdByNode,
         nodes,
         alignment.missing,
+        pathCursor,
       );
       profile.samples[i] = leafId;
       repaired[i] = 1;
