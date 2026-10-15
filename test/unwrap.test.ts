@@ -214,3 +214,16 @@ describe("unwrapProfile", () => {
     assert.deepEqual(names(out, 1), ["onStreamRead", "(root)"]);
   });
 });
+
+describe("stackNodes", () => {
+  it("stops on a parent cycle", () => {
+    const cyc = profileFromStacks([["leaf", "(root)"]]);
+    const leaf = cyc.nodes.find((n) => functionName(n) === "leaf")!;
+    const root = cyc.nodes.find((n) => functionName(n) === "(root)")!;
+    leaf.children = [root.id];
+    root.children = [leaf.id];
+    const index = buildIndex(cyc);
+    const namesOnCycle = stackNodes(index, leaf.id).map(functionName);
+    assert.deepEqual(namesOnCycle, ["leaf", "(root)"]);
+  });
+});

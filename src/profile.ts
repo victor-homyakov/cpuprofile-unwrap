@@ -38,19 +38,32 @@ export type ProfileIndex = {
   profile: CpuProfile;
   nodesById: Map<number, ProfileNode>;
   parent: Map<number, number>;
+  /** Parent node id by child id. 0 means no parent. */
+  parentOf: Uint32Array;
+  /** Node by id. Empty slots are missing ids. */
+  nodeAt: Array<ProfileNode | undefined>;
+  /** Reused cycle guard for stack walks. A slot holds the walk number that last visited it. */
+  seenStamp: Uint32Array;
+  walkStamp: number;
   rootId: number;
   /** Interned call-frame id for each node id. Equal frames share one id. */
   frameIdByNode: Map<number, number>;
 };
 
 export function buildIndex(profile: CpuProfile): ProfileIndex {
+  let maxId = 0;
+  for (const node of profile.nodes) if (node.id > maxId) maxId = node.id;
   const nodesById = new Map<number, ProfileNode>();
   const parent = new Map<number, number>();
+  const parentOf = new Uint32Array(maxId + 1);
+  const nodeAt: Array<ProfileNode | undefined> = new Array(maxId + 1);
+  const seenStamp = new Uint32Array(maxId + 1);
   const idByKey = new Map<string, number>();
   const frameIdByNode = new Map<number, number>();
   let nextFrameId = 1;
   for (const node of profile.nodes) {
     nodesById.set(node.id, node);
+    if (node.id > 0 && node.id <= maxId) nodeAt[node.id] = node;
     const raw = callFrameKey(node.callFrame);
     let frameId = idByKey.get(raw);
     if (frameId === undefined) {
@@ -60,6 +73,7 @@ export function buildIndex(profile: CpuProfile): ProfileIndex {
     frameIdByNode.set(node.id, frameId);
     for (const child of node.children ?? []) {
       parent.set(child, node.id);
+      if (child > 0 && child <= maxId) parentOf[child] = node.id;
     }
   }
   const root =
@@ -67,26 +81,43 @@ export function buildIndex(profile: CpuProfile): ProfileIndex {
   if (!root) {
     throw new Error("CPU profile has no nodes");
   }
-  return { profile, nodesById, parent, rootId: root.id, frameIdByNode };
+  return {
+    profile,
+    nodesById,
+    parent,
+    parentOf,
+    nodeAt,
+    seenStamp,
+    walkStamp: 0,
+    rootId: root.id,
+    frameIdByNode,
+  };
 }
 
 /** Stack of node ids from leaf to root. */
 export function stackIds(index: ProfileIndex, leafId: number): number[] {
-  const stack: number[] = [];
-  const seen = new Set<number>();
-  let id: number | undefined = leafId;
-  while (id !== undefined && !seen.has(id)) {
-    seen.add(id);
-    const node = index.nodesById.get(id);
-    if (!node) break;
-    stack.push(id);
-    id = index.parent.get(id);
-  }
-  return stack;
+  return stackNodes(index, leafId).map((node) => node.id);
 }
 
 export function stackNodes(index: ProfileIndex, leafId: number): ProfileNode[] {
-  return stackIds(index, leafId).map((id) => index.nodesById.get(id)!);
+  const { parentOf, nodeAt, seenStamp } = index;
+  if (leafId <= 0 || leafId >= parentOf.length) return [];
+  let stamp = ++index.walkStamp;
+  if (stamp === 0xffffffff) {
+    seenStamp.fill(0);
+    stamp = index.walkStamp = 1;
+  }
+  const stack: ProfileNode[] = [];
+  let id = leafId;
+  while (id !== 0 && id < parentOf.length) {
+    if (seenStamp[id] === stamp) break;
+    seenStamp[id] = stamp;
+    const node = nodeAt[id];
+    if (!node) break;
+    stack.push(node);
+    id = parentOf[id]!;
+  }
+  return stack;
 }
 
 export function nearRootName(nodes: ProfileNode[]): string {
