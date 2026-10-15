@@ -75,24 +75,35 @@ export function recomputeHitCounts(profile: CpuProfile): void {
 }
 
 export function pruneUnreachable(profile: CpuProfile, rootId: number): void {
-  const parent = new Map<number, number>();
+  let maxId = rootId;
   for (const node of profile.nodes) {
-    for (const c of node.children ?? []) parent.set(c, node.id);
+    if (node.id > maxId) maxId = node.id;
+    for (const c of node.children ?? []) if (c > maxId) maxId = c;
   }
-  const keep = new Set<number>([rootId]);
-  for (const leaf of profile.samples) {
-    let id: number | undefined = leaf;
-    const seen = new Set<number>();
-    while (id !== undefined && !seen.has(id)) {
-      seen.add(id);
-      keep.add(id);
-      id = parent.get(id);
+  for (const sample of profile.samples) if (sample > maxId) maxId = sample;
+
+  const parent = new Uint32Array(maxId + 1);
+  for (const node of profile.nodes) {
+    if (node.id > maxId) continue;
+    for (const c of node.children ?? []) {
+      if (c > 0 && c <= maxId) parent[c] = node.id;
     }
   }
-  profile.nodes = profile.nodes.filter((n) => keep.has(n.id));
+  const keep = new Uint8Array(maxId + 1);
+  if (rootId > 0 && rootId <= maxId) keep[rootId] = 1;
+  for (const leaf of profile.samples) {
+    let id = leaf;
+    while (id > 0 && id <= maxId && keep[id] === 0) {
+      keep[id] = 1;
+      const next = parent[id]!;
+      if (next === id) break;
+      id = next;
+    }
+  }
+  profile.nodes = profile.nodes.filter((n) => n.id > 0 && n.id <= maxId && keep[n.id] === 1);
   for (const node of profile.nodes) {
     if (node.children) {
-      node.children = node.children.filter((id) => keep.has(id));
+      node.children = node.children.filter((id) => id > 0 && id <= maxId && keep[id] === 1);
     }
   }
 }
