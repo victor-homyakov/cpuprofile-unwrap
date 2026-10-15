@@ -21,60 +21,62 @@ export type SampleInfo = {
   structuralCandidate: boolean;
 };
 
-type NodeFacts = {
-  depth: Map<number, number>;
-  nearRoot: Map<number, string>;
-  ticks: Map<number, boolean>;
-  idleOrGc: Map<number, boolean>;
+type NodeFact = {
+  depth: number;
+  nearRoot: string;
+  ticks: boolean;
+  idleOrGc: boolean;
 };
 
 /** Depth, near-root name, and ticks/idle flags via the parent chain. Each node is visited once. */
-function nodeFacts(index: ProfileIndex): NodeFacts {
-  const depth = new Map<number, number>();
-  const nearRoot = new Map<number, string>();
-  const ticks = new Map<number, boolean>();
-  const idleOrGc = new Map<number, boolean>();
-  const { parent, nodesById } = index;
+function nodeFacts(index: ProfileIndex): Array<NodeFact | undefined> {
+  const { parentOf, nodeAt } = index;
+  const facts: Array<NodeFact | undefined> = new Array(parentOf.length);
+
+  const parentIdOf = (id: number): number =>
+    id > 0 && id < parentOf.length ? parentOf[id]! : 0;
 
   const ensure = (start: number): void => {
+    if (start <= 0 || start >= facts.length) return;
     const chain: number[] = [];
     const seen = new Set<number>();
-    let cur: number | undefined = start;
-    while (cur !== undefined && !depth.has(cur) && !seen.has(cur)) {
+    let cur = start;
+    while (cur !== 0 && facts[cur] === undefined && !seen.has(cur)) {
       seen.add(cur);
       chain.push(cur);
-      cur = parent.get(cur);
+      cur = parentIdOf(cur);
     }
     for (let i = chain.length - 1; i >= 0; i--) {
       const id = chain[i]!;
-      if (depth.has(id)) continue;
-      const node = nodesById.get(id);
+      if (facts[id] !== undefined) continue;
+      const node = nodeAt[id];
       if (!node) {
-        depth.set(id, 0);
-        nearRoot.set(id, "");
-        ticks.set(id, false);
-        idleOrGc.set(id, false);
+        facts[id] = { depth: 0, nearRoot: "", ticks: false, idleOrGc: false };
         continue;
       }
       const name = functionName(node);
-      const p = parent.get(id);
-      const pDepth = p === undefined ? undefined : depth.get(p);
-      if (pDepth === undefined) {
-        depth.set(id, 1);
-        nearRoot.set(id, name);
-        ticks.set(id, name === TICKS_NAME);
-        idleOrGc.set(id, IDLE_OR_GC.has(name));
+      const parentId = parentIdOf(id);
+      const parentFact = parentId === 0 ? undefined : facts[parentId];
+      if (parentFact === undefined) {
+        facts[id] = {
+          depth: 1,
+          nearRoot: name,
+          ticks: name === TICKS_NAME,
+          idleOrGc: IDLE_OR_GC.has(name),
+        };
       } else {
-        depth.set(id, pDepth + 1);
-        nearRoot.set(id, pDepth === 1 ? name : nearRoot.get(p!)!);
-        ticks.set(id, ticks.get(p!)! || name === TICKS_NAME);
-        idleOrGc.set(id, idleOrGc.get(p!)! || IDLE_OR_GC.has(name));
+        facts[id] = {
+          depth: parentFact.depth + 1,
+          nearRoot: parentFact.depth === 1 ? name : parentFact.nearRoot,
+          ticks: parentFact.ticks || name === TICKS_NAME,
+          idleOrGc: parentFact.idleOrGc || IDLE_OR_GC.has(name),
+        };
       }
     }
   };
 
   for (const leafId of index.profile.samples) ensure(leafId);
-  return { depth, nearRoot, ticks, idleOrGc };
+  return facts;
 }
 
 export function analyzeSamples(index: ProfileIndex): {
@@ -85,17 +87,18 @@ export function analyzeSamples(index: ProfileIndex): {
   const facts = nodeFacts(index);
   let maxDepth = 0;
   const samples: SampleInfo[] = index.profile.samples.map((leafId, i) => {
-    const depth = facts.depth.get(leafId) ?? 0;
+    const fact = leafId > 0 && leafId < facts.length ? facts[leafId] : undefined;
+    const depth = fact?.depth ?? 0;
     if (depth > maxDepth) maxDepth = depth;
-    const near = facts.nearRoot.get(leafId) ?? "";
+    const near = fact?.nearRoot ?? "";
     return {
       index: i,
       leafId,
       nodes: null,
       depth,
       nearRoot: near,
-      ticks: facts.ticks.get(leafId) ?? false,
-      idleOrGc: facts.idleOrGc.get(leafId) ?? false,
+      ticks: fact?.ticks ?? false,
+      idleOrGc: fact?.idleOrGc ?? false,
       structuralCandidate: !RUNTIME_ENTRIES.has(near),
     };
   });

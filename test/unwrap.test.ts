@@ -14,59 +14,8 @@ function frame(functionName: string, extra = ""): CallFrame {
   };
 }
 
-/** Build a profile by merging leaf→root name stacks into a tree. */
-function profileFromStacks(stacks: string[][]): CpuProfile {
-  const root: ProfileNode = {
-    id: 1,
-    callFrame: frame("(root)"),
-    hitCount: 0,
-    children: [],
-  };
-  const nodes: ProfileNode[] = [root];
-  let nextId = 2;
-  const childByKey = new Map<string, ProfileNode>();
-
-  function key(parentId: number, name: string): string {
-    return `${parentId}\0${name}`;
-  }
-
-  const samples: number[] = [];
-  for (const stack of stacks) {
-    assert.equal(stack[stack.length - 1], "(root)");
-    let parent = root;
-    for (let i = stack.length - 2; i >= 0; i--) {
-      const name = stack[i]!;
-      const k = key(parent.id, name);
-      let child = childByKey.get(k);
-      if (!child) {
-        child = {
-          id: nextId++,
-          callFrame: frame(name, name),
-          hitCount: 0,
-          children: [],
-        };
-        nodes.push(child);
-        parent.children = parent.children ?? [];
-        parent.children.push(child.id);
-        childByKey.set(k, child);
-      }
-      parent = child;
-    }
-    parent.hitCount++;
-    samples.push(parent.id);
-  }
-
-  return {
-    nodes,
-    startTime: 0,
-    endTime: stacks.length,
-    samples,
-    timeDeltas: samples.map(() => 1),
-  };
-}
-
-/** Same as profileFromStacks, but frames are supplied explicitly. */
-function profileFromFrameStacks(stacks: CallFrame[][]): CpuProfile {
+/** Merge leaf→root stacks into one tree. Child identity is the call frame. */
+function profileFromFrames(stacks: CallFrame[][]): CpuProfile {
   const root: ProfileNode = {
     id: 1,
     callFrame: frame("(root)"),
@@ -110,6 +59,15 @@ function profileFromFrameStacks(stacks: CallFrame[][]): CpuProfile {
     samples,
     timeDeltas: samples.map(() => 1),
   };
+}
+
+/** Name stacks become frames. `(root)` stays the synthetic root frame. */
+function profileFromStacks(stacks: string[][]): CpuProfile {
+  return profileFromFrames(
+    stacks.map((stack) =>
+      stack.map((name) => (name === "(root)" ? frame("(root)") : frame(name, name))),
+    ),
+  );
 }
 
 function at(functionName: string, url: string, lineNumber: number): CallFrame {
@@ -173,7 +131,7 @@ describe("unwrapProfile", () => {
     const sharedA = shared.map((name, i) => at(name, "a.js", i));
     const sharedB = shared.map((name, i) => at(name, "b.js", i));
     const root = at("(root)", "", 0);
-    const profile = profileFromFrameStacks([
+    const profile = profileFromFrames([
       [at("leafA", "a.js", 1), ...sharedA, at("C", "a.js", 20), at("processTicksAndRejections", "node:internal", 1), root],
       [at("leafB", "b.js", 1), ...sharedB, root],
       [at("leafA", "a.js", 1), ...sharedA, at("C", "a.js", 20), at("processTicksAndRejections", "node:internal", 1), root],

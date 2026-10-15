@@ -4,7 +4,16 @@ import type { CpuProfile, ProfileNode } from "./types.ts";
 /** Frame ids and tree node ids of the previous root→leaf insertion, excluding root. */
 export type PathCursor = {
   frames: number[];
-  nodes: number[];
+  nodeIds: number[];
+};
+
+/** Profile tree mutated while restored frames are inserted. */
+export type ProfileTree = {
+  profile: CpuProfile;
+  nodesById: Map<number, ProfileNode>;
+  childrenByKey: Map<number, Map<number, number>>;
+  nextId: { value: number };
+  frameIdByNode: Map<number, number>;
 };
 
 /**
@@ -13,15 +22,12 @@ export type PathCursor = {
  * `cursor` skips the prefix already inserted by the previous call.
  */
 export function ensurePath(
-  profile: CpuProfile,
-  nodesById: Map<number, ProfileNode>,
-  childrenByKey: Map<number, Map<number, number>>,
-  nextId: { value: number },
-  frameIdByNode: Map<number, number>,
+  tree: ProfileTree,
   head: readonly ProfileNode[],
   middle: readonly ProfileNode[],
   cursor: PathCursor,
 ): number {
+  const { profile, nodesById, childrenByKey, nextId, frameIdByNode } = tree;
   if (head.length === 0) {
     throw new Error("empty stack");
   }
@@ -29,7 +35,7 @@ export function ensurePath(
   const headFrames = head.length - 1;
   const steps = headFrames + middle.length;
   const frames = cursor.frames;
-  const nodeIds = cursor.nodes;
+  const nodeIds = cursor.nodeIds;
 
   const frameAt = (k: number): ProfileNode => {
     const i = steps - 1 - k;

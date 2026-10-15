@@ -36,8 +36,6 @@ export function callFrameKey(frame: CallFrame): string {
 
 export type ProfileIndex = {
   profile: CpuProfile;
-  nodesById: Map<number, ProfileNode>;
-  parent: Map<number, number>;
   /** Parent node id by child id. 0 means no parent. */
   parentOf: Uint32Array;
   /** Node by id. Empty slots are missing ids. */
@@ -52,9 +50,12 @@ export type ProfileIndex = {
 
 export function buildIndex(profile: CpuProfile): ProfileIndex {
   let maxId = 0;
-  for (const node of profile.nodes) if (node.id > maxId) maxId = node.id;
-  const nodesById = new Map<number, ProfileNode>();
-  const parent = new Map<number, number>();
+  for (const node of profile.nodes) {
+    if (node.id > maxId) maxId = node.id;
+    for (const child of node.children ?? []) if (child > maxId) maxId = child;
+  }
+  for (const sample of profile.samples) if (sample > maxId) maxId = sample;
+
   const parentOf = new Uint32Array(maxId + 1);
   const nodeAt: Array<ProfileNode | undefined> = new Array(maxId + 1);
   const seenStamp = new Uint32Array(maxId + 1);
@@ -62,7 +63,6 @@ export function buildIndex(profile: CpuProfile): ProfileIndex {
   const frameIdByNode = new Map<number, number>();
   let nextFrameId = 1;
   for (const node of profile.nodes) {
-    nodesById.set(node.id, node);
     if (node.id > 0 && node.id <= maxId) nodeAt[node.id] = node;
     const raw = callFrameKey(node.callFrame);
     let frameId = idByKey.get(raw);
@@ -72,7 +72,6 @@ export function buildIndex(profile: CpuProfile): ProfileIndex {
     }
     frameIdByNode.set(node.id, frameId);
     for (const child of node.children ?? []) {
-      parent.set(child, node.id);
       if (child > 0 && child <= maxId) parentOf[child] = node.id;
     }
   }
@@ -83,8 +82,6 @@ export function buildIndex(profile: CpuProfile): ProfileIndex {
   }
   return {
     profile,
-    nodesById,
-    parent,
     parentOf,
     nodeAt,
     seenStamp,
@@ -92,11 +89,6 @@ export function buildIndex(profile: CpuProfile): ProfileIndex {
     rootId: root.id,
     frameIdByNode,
   };
-}
-
-/** Stack of node ids from leaf to root. */
-export function stackIds(index: ProfileIndex, leafId: number): number[] {
-  return stackNodes(index, leafId).map((node) => node.id);
 }
 
 export function stackNodes(index: ProfileIndex, leafId: number): ProfileNode[] {

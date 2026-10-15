@@ -10,7 +10,13 @@ import {
   buildIndex,
   functionName,
 } from "./profile.ts";
-import { ensurePath, pruneUnreachable, recomputeHitCounts, type PathCursor } from "./repair.ts";
+import {
+  ensurePath,
+  pruneUnreachable,
+  recomputeHitCounts,
+  type PathCursor,
+  type ProfileTree,
+} from "./repair.ts";
 import type { CpuProfile, UnwrapStats } from "./types.ts";
 
 export type UnwrapResult = {
@@ -41,9 +47,15 @@ export function unwrapProfile(profile: CpuProfile): UnwrapResult {
   for (const node of profile.nodes) {
     if (node.id > maxId) maxId = node.id;
   }
-  const nextId = { value: maxId + 1 };
+  const tree: ProfileTree = {
+    profile,
+    nodesById,
+    childrenByKey,
+    nextId: { value: maxId + 1 },
+    frameIdByNode: index.frameIdByNode,
+  };
 
-  const pathCursor: PathCursor = { frames: [], nodes: [] };
+  const pathCursor: PathCursor = { frames: [], nodeIds: [] };
   const cutNames: Record<string, number> = {};
   let repairedCount = 0;
   let skippedCount = 0;
@@ -68,16 +80,7 @@ export function unwrapProfile(profile: CpuProfile): UnwrapResult {
       }
 
       cutNames[sample.nearRoot] = (cutNames[sample.nearRoot] ?? 0) + 1;
-      const leafId = ensurePath(
-        profile,
-        nodesById,
-        childrenByKey,
-        nextId,
-        index.frameIdByNode,
-        nodes,
-        alignment.missing,
-        pathCursor,
-      );
+      const leafId = ensurePath(tree, nodes, alignment.missing, pathCursor);
       profile.samples[i] = leafId;
       repaired[i] = 1;
       repairedCount++;
