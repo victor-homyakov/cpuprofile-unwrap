@@ -1,13 +1,11 @@
 import { TICKS_NAME, functionName } from "./profile.ts";
 import type { ProfileNode } from "./types.ts";
 
-export const MIN_WINDOW = 8;
-export const MAX_WINDOW = 64;
+const MIN_WINDOW = 8;
+const MAX_WINDOW = 64;
 
 export type Alignment = {
-  donorIndex: number;
   window: number;
-  matchStart: number;
   missing: ProfileNode[];
 };
 
@@ -24,7 +22,6 @@ function frameId(node: ProfileNode, frameIdByNode: Map<number, number>): number 
   return frameIdByNode.get(node.id) ?? 0;
 }
 
-/** Frame-id array for a donor stack. Excludes the root frame. */
 export function prepareDonor(
   nodes: ProfileNode[],
   sampleIndex: number,
@@ -62,8 +59,7 @@ function rightmostWindowMatch(
   return -1;
 }
 
-export function alignWithDonor(truncIds: number[], donor: Donor): Alignment | null {
-  // Ids are leaf→root and already exclude (root).
+function alignWithDonor(truncIds: number[], donor: Donor): Alignment | null {
   const donorIds = donor.frameIds;
   if (truncIds.length === 0 || donorIds.length === 0) return null;
 
@@ -85,16 +81,10 @@ export function alignWithDonor(truncIds: number[], donor: Donor): Alignment | nu
     }
   }
 
-  if (bestW < MIN_WINDOW || bestStart < 0) return null;
-  if (donor.ticksIndex < bestStart + bestW) return null;
+  if (bestW < MIN_WINDOW) return null;
   const missing = donor.nodes.slice(bestStart + bestW, donor.nodes.length - 1);
 
-  return {
-    donorIndex: donor.sampleIndex,
-    window: bestW,
-    matchStart: bestStart,
-    missing,
-  };
+  return { window: bestW, missing };
 }
 
 export function pickAlignment(

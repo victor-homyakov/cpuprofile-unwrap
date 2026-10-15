@@ -1,24 +1,18 @@
 import type { CallFrame, CpuProfile, ProfileNode } from "./types.ts";
 
-export const RUNTIME_ENTRIES = new Set([
-  "processTicksAndRejections",
-  "processTimers",
-  "processImmediate",
-  "(idle)",
-  "(program)",
-  "(garbage collector)",
-]);
-
-export const IDLE_OR_GC = new Set(["(idle)", "(garbage collector)"]);
-
-export const SKIP_WHEN_SEEKING_DONOR = new Set([
-  "(idle)",
-  "(garbage collector)",
-  "(program)",
-]);
-
 export const TICKS_NAME = "processTicksAndRejections";
 export const ROOT_NAME = "(root)";
+
+const IDLE_OR_GC = new Set(["(idle)", "(garbage collector)"]);
+
+export const SKIP_WHEN_SEEKING_DONOR = new Set([...IDLE_OR_GC, "(program)"]);
+
+export const RUNTIME_ENTRIES = new Set([
+  TICKS_NAME,
+  "processTimers",
+  "processImmediate",
+  ...SKIP_WHEN_SEEKING_DONOR,
+]);
 
 export function functionName(node: ProfileNode): string {
   return node.callFrame?.functionName || "(anonymous)";
@@ -110,19 +104,6 @@ export function stackNodes(index: ProfileIndex, leafId: number): ProfileNode[] {
     id = parentOf[id]!;
   }
   return stack;
-}
-
-export function nearRootName(nodes: ProfileNode[]): string {
-  if (nodes.length >= 2) return functionName(nodes[nodes.length - 2]!);
-  return nodes.length ? functionName(nodes[0]!) : "";
-}
-
-export function hasTicks(nodes: ProfileNode[]): boolean {
-  return nodes.some((n) => functionName(n) === TICKS_NAME);
-}
-
-export function isIdleOrGcStack(nodes: ProfileNode[]): boolean {
-  return nodes.some((n) => IDLE_OR_GC.has(functionName(n)));
 }
 
 export function cloneCallFrame(frame: CallFrame): CallFrame {

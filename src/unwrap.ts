@@ -6,6 +6,7 @@ import {
   nearestTicksNeighbors,
 } from "./detect.ts";
 import {
+  ROOT_NAME,
   RUNTIME_ENTRIES,
   buildIndex,
   functionName,
@@ -17,20 +18,22 @@ import {
   type PathCursor,
   type ProfileTree,
 } from "./repair.ts";
-import type { CpuProfile, UnwrapStats } from "./types.ts";
+import type { CpuProfile, ProfileNode, UnwrapStats } from "./types.ts";
 
 export type UnwrapResult = {
   profile: CpuProfile;
   stats: UnwrapStats;
 };
 
-function rootChildNames(profile: CpuProfile): string[] {
-  const root = profile.nodes.find((n) => functionName(n) === "(root)") ?? profile.nodes[0];
+function rootChildNames(
+  profile: CpuProfile,
+  nodeAt: (id: number) => ProfileNode | undefined,
+): string[] {
+  const root = profile.nodes.find((n) => functionName(n) === ROOT_NAME) ?? profile.nodes[0];
   if (!root) return [];
-  const byId = new Map(profile.nodes.map((n) => [n.id, n]));
   return (root.children ?? []).map((id) => {
-    const n = byId.get(id);
-    return n ? functionName(n) : `#${id}`;
+    const node = nodeAt(id);
+    return node ? functionName(node) : `#${id}`;
   });
 }
 
@@ -38,8 +41,13 @@ export function unwrapProfile(profile: CpuProfile): UnwrapResult {
   const index = buildIndex(profile);
   const { samples, maxDepth, depthThreshold } = analyzeSamples(index);
   const loadNodes = bindSampleNodes(index);
-  const rootChildrenBefore = rootChildNames(profile);
-  const samplesWithTicksBefore = samples.filter((s) => s.ticks).length;
+  const rootChildrenBefore = rootChildNames(profile, (id) => index.nodeAt[id]);
+  let samplesWithTicksBefore = 0;
+  let candidateCount = 0;
+  for (const sample of samples) {
+    if (sample.ticks) samplesWithTicksBefore++;
+    if (sample.structuralCandidate) candidateCount++;
+  }
 
   const nodesById = new Map(profile.nodes.map((n) => [n.id, n]));
   const childrenByKey = new Map<number, Map<number, number>>();
@@ -59,7 +67,7 @@ export function unwrapProfile(profile: CpuProfile): UnwrapResult {
   const cutNames: Record<string, number> = {};
   let repairedCount = 0;
   let skippedCount = 0;
-  const repaired = new Uint8Array(samples.length);
+  let samplesWithTicksAfter = samplesWithTicksBefore;
 
   const runs = candidateRuns(samples);
   for (const [runStart, runEnd] of runs) {
@@ -82,29 +90,24 @@ export function unwrapProfile(profile: CpuProfile): UnwrapResult {
       cutNames[sample.nearRoot] = (cutNames[sample.nearRoot] ?? 0) + 1;
       const leafId = ensurePath(tree, nodes, alignment.missing, pathCursor);
       profile.samples[i] = leafId;
-      repaired[i] = 1;
       repairedCount++;
+      if (!sample.ticks) samplesWithTicksAfter++;
     }
   }
 
   recomputeHitCounts(profile);
   pruneUnreachable(profile, index.rootId);
 
-  let samplesWithTicksAfter = 0;
-  for (let i = 0; i < samples.length; i++) {
-    if (samples[i]!.ticks || repaired[i]) samplesWithTicksAfter++;
-  }
-
   const stats: UnwrapStats = {
     sampleCount: samples.length,
     maxDepth,
     depthThreshold,
-    candidateCount: samples.filter((s) => s.structuralCandidate).length,
+    candidateCount,
     repairedCount,
     skippedCount,
     cutNames,
     rootChildrenBefore,
-    rootChildrenAfter: rootChildNames(profile),
+    rootChildrenAfter: rootChildNames(profile, (id) => nodesById.get(id)),
     samplesWithTicksBefore,
     samplesWithTicksAfter,
   };

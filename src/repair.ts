@@ -120,7 +120,6 @@ export function pruneUnreachable(profile: CpuProfile, rootId: number): void {
 
   const parent = new Uint32Array(maxId + 1);
   for (const node of profile.nodes) {
-    if (node.id > maxId) continue;
     for (const c of node.children ?? []) {
       if (c > 0 && c <= maxId) parent[c] = node.id;
     }
