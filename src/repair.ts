@@ -12,7 +12,7 @@ export type ProfileTree = {
   profile: CpuProfile;
   nodesById: Map<number, ProfileNode>;
   childrenByKey: Map<number, Map<number, number>>;
-  nextId: { value: number };
+  nextId: number;
   frameIdByNode: Map<number, number>;
 };
 
@@ -27,7 +27,7 @@ export function ensurePath(
   middle: readonly ProfileNode[],
   cursor: PathCursor,
 ): number {
-  const { profile, nodesById, childrenByKey, nextId, frameIdByNode } = tree;
+  const { profile, nodesById, childrenByKey, frameIdByNode } = tree;
   if (head.length === 0) {
     throw new Error("empty stack");
   }
@@ -75,7 +75,7 @@ export function ensurePath(
     if (existing !== undefined) {
       currentId = existing;
     } else {
-      const id = nextId.value++;
+      const id = tree.nextId++;
       const created: ProfileNode = {
         id,
         callFrame: cloneCallFrame(frameNode.callFrame),

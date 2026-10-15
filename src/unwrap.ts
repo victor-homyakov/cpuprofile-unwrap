@@ -51,7 +51,7 @@ export function unwrapProfile(profile: CpuProfile): UnwrapResult {
     profile,
     nodesById,
     childrenByKey,
-    nextId: { value: maxId + 1 },
+    nextId: maxId + 1,
     frameIdByNode: index.frameIdByNode,
   };
 
